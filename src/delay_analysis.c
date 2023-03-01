@@ -14,6 +14,7 @@ static volatile bool exiting = false;
 int count = 0;
 int count_i = 0;
 bool verbose = false;
+int dir = 1;
 
 int sport,dport,sampling;
 
@@ -25,7 +26,8 @@ static const struct argp_option opts[] = {
     { "dport", 'd', "DPORT", 0, "trace this destination port only" },
     { "sample", 'S', "SAMPLING", 0, "Trace sampling" },
 	{ "count", 'c', "COUNT", 0, "count of outputs"},
-    {},
+    { "dir", 'D', "DIRECTION", 0, "in/out(1/0),default is in"},
+	{},
 };
 
 static error_t parse_arg(int key, char *arg, struct argp_state *state)
@@ -46,6 +48,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
             break;
 		case 'c':
 			count = strtoul(arg,&end,10);
+			break;
+		case 'D':
+			dir = strtoul(arg,&end,10);
 			break;
         default:
 		    return ARGP_ERR_UNKNOWN;
@@ -86,17 +91,32 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
     char d_ipv4_port_str[INET_ADDRSTRLEN+6];
     sprintf(s_ipv4_port_str,"%s:%d",inet_ntop(AF_INET, &src, s_str, sizeof(s_str)),d->sport);
     sprintf(d_ipv4_port_str,"%s:%d",inet_ntop(AF_INET, &dst, d_str, sizeof(d_str)),d->dport);
-    printf("%-22s %-22s %-12u %-12u %-20f %-8u %-5u %-5u %-5u\n",
-        s_ipv4_port_str,
-        d_ipv4_port_str,
-        d->seq,
-        d->ack,
-        d->mac_timestamp*1e-9,
-        (unsigned int)(d->total_time/1000),
-        (unsigned int)(d->mac_time/1000),
-        (unsigned int)(d->ip_time/1000),
-        (unsigned int)(d->tcp_time/1000)
-    );
+	if(d->dir){
+		printf("%-22s %-22s %-12u %-12u %-20f %-8u %-5u %-5u %-5u\n",
+			s_ipv4_port_str,
+			d_ipv4_port_str,
+			d->seq,
+			d->ack,
+			d->mac_timestamp*1e-9,
+			(unsigned int)(d->total_time/1000),
+			(unsigned int)(d->mac_time/1000),
+			(unsigned int)(d->ip_time/1000),
+			(unsigned int)(d->tcp_time/1000)
+		);
+	}
+	else{
+		printf("%-22s %-22s %-12u %-12u %-20f %-8u %-5u %-5u %-5u\n",
+			s_ipv4_port_str,
+			d_ipv4_port_str,
+			d->seq,
+			d->ack,
+			d->qdisc_timestamp*1e-3,
+			(unsigned int)(d->total_time/1000),
+			(unsigned int)(d->qdisc_time/1000),
+			(unsigned int)(d->ip_time/1000),
+			(unsigned int)(d->tcp_time/1000)
+		);
+	}
 	count_i++;
     return 0;
 }
@@ -155,9 +175,14 @@ int main(int argc, char **argv)
 	}
 
 	/* Process events */
-	printf("%-22s %-22s %-12s %-12s %-20s %-8s %-5s %-5s %-5s\n" ,
-        "SADDR:SPORT", "DADDR:DPORT", "SEQ", "ACK", "TIME", "TOTAL", "MAC", "IP", "TCP");
-    
+	if(dir){
+		printf("%-22s %-22s %-12s %-12s %-20s %-8s %-5s %-5s %-5s\n" ,
+        	"SADDR:SPORT", "DADDR:DPORT", "SEQ", "ACK", "TIME", "TOTAL", "MAC", "IP", "TCP");
+	}
+	else{
+		printf("%-22s %-22s %-12s %-12s %-20s %-8s %-5s %-5s %-5s\n" ,
+        	"SADDR:SPORT", "DADDR:DPORT", "SEQ", "ACK", "TIME", "TOTAL", "QDisc", "IP", "TCP");
+	}
 	while (!exiting) {
 		err = ring_buffer__poll(rb, 100 /* timeout, ms */);
 		/* Ctrl-C will cause -EINTR */
