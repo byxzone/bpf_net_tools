@@ -12,21 +12,21 @@
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
 	__uint(max_entries, 10800);
 	__type(key, struct packet_tuple);
 	__type(value, struct flow_tuple);
 } flows SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
 	__uint(max_entries, 10800);
 	__type(key, struct packet_tuple);
 	__type(value, struct ktime_info);
 } in_timestamps SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
 	__uint(max_entries, 10800);
 	__type(key, struct packet_tuple);
 	__type(value, struct ktime_info);
@@ -76,22 +76,25 @@ int BPF_KPROBE(eth_type_trans, struct sk_buff *skb){
 
     if (protocol == 8){ // Protocol is IP
         struct iphdr *ip = (struct iphdr *)(BPF_CORE_READ(skb,data) + 14);
-        // TODO options in hdr
-        struct tcphdr *tcp = (struct tcphdr *)(BPF_CORE_READ(skb,data) + 34);
-        struct packet_tuple pkt_tuple = {};
-        get_pkt_tuple(&pkt_tuple, ip, tcp);
-        
-        SAMPLING
-        FILTER_DPORT
-        FILTER_SPORT
-        
-        struct ktime_info *tinfo, zero={}; 
-        
-        tinfo = (struct ktime_info *)bpf_map_lookup_or_try_init(&in_timestamps,&pkt_tuple, &zero);
-        if (tinfo == NULL){
-            return 0;
+        if(BPF_CORE_READ(ip,protocol) == IPPROTO_TCP){
+            // TODO options in hdr
+            struct tcphdr *tcp = (struct tcphdr *)(BPF_CORE_READ(skb,data) + 34);
+            struct packet_tuple pkt_tuple = {};
+            get_pkt_tuple(&pkt_tuple, ip, tcp);
+            
+            SAMPLING
+            FILTER_DPORT
+            FILTER_SPORT
+            
+            struct ktime_info *tinfo, zero={}; 
+            
+            tinfo = (struct ktime_info *)bpf_map_lookup_or_try_init(&in_timestamps,&pkt_tuple, &zero);
+            if (tinfo == NULL){
+                bpf_printk("map init error");
+                return 0;
+            }
+            tinfo->mac_time = bpf_ktime_get_ns();
         }
-        tinfo->mac_time = bpf_ktime_get_ns();
     }
 
     return 0;
@@ -104,22 +107,23 @@ int BPF_KPROBE(ip_rcv_core,struct sk_buff *skb){
     }
     
     struct iphdr *ip = skb_to_iphdr(skb);
-    struct tcphdr *tcp = skb_to_tcphdr(skb);
-    struct packet_tuple pkt_tuple = {};
-    get_pkt_tuple(&pkt_tuple, ip, tcp);
+    if(BPF_CORE_READ(ip,protocol) == IPPROTO_TCP){
+        struct tcphdr *tcp = skb_to_tcphdr(skb);
+        struct packet_tuple pkt_tuple = {};
+        get_pkt_tuple(&pkt_tuple, ip, tcp);
 
-    SAMPLING
-    FILTER_DPORT
-    FILTER_SPORT
+        SAMPLING
+        FILTER_DPORT
+        FILTER_SPORT
 
-    struct ktime_info *tinfo;
-    
-    if ((tinfo = bpf_map_lookup_elem(&in_timestamps,&pkt_tuple)) == NULL){
-        return 0;
+        struct ktime_info *tinfo;
+        
+        if ((tinfo = bpf_map_lookup_elem(&in_timestamps,&pkt_tuple)) == NULL){
+            return 0;
+        }
+        
+        tinfo->ip_time = bpf_ktime_get_ns();
     }
-    
-    tinfo->ip_time = bpf_ktime_get_ns();
-    
     return 0;
 }
 
